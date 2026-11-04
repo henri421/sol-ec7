@@ -50,7 +50,7 @@ export interface ContraintesBase {
 export function contraintesBase(d: DonneesBase): ContraintesBase {
   const D = positif(d.D, 'La profondeur de la base D', 'm');
   const gamma = positif(d.gamma, 'Le poids volumique gamma', 'kN/m3');
-  const gammaSat = positif(d.gammaSat, 'Le poids volumique sature gammaSat', 'kN/m3');
+  const gammaSat = positif(d.gammaSat, 'Le poids volumique saturé gammaSat', 'kN/m3');
   const gammaW = positif(d.gammaW, "Le poids volumique de l'eau gammaW", 'kN/m3');
   const B = positif(d.B, 'La largeur B', 'm');
   const gp = gammaSat - gammaW;

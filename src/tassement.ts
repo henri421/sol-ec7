@@ -79,7 +79,7 @@ export function tassementElastique(d: DonneesTassementElastique): ResultatTassem
   if (!(Number.isFinite(d.nu) && d.nu >= 0 && d.nu < 0.5)) {
     throw new Error('Le coefficient de Poisson nu doit être compris entre 0 et 0,5 (-).');
   }
-  positif(d.Em, "Le module d'elasticite Em", 'kPa');
+  positif(d.Em, "Le module d'élasticité Em", 'kPa');
   const Is = influenceIs(d.LsurB, d.raideur);
   const s_mm = (d.p * d.B * (1 - d.nu * d.nu) * Is * 1000) / d.Em;
   return { Is, s_mm };
@@ -169,7 +169,7 @@ export function tassementOedometre(d: DonneesOedometre): ResultatOedometre {
   const Cc = positifOuNul(d.Cc, "L'indice de compression Cc", '-');
   const Cs = positifOuNul(d.Cs, "L'indice de gonflement Cs", '-');
   const e0 = positif(d.e0, "L'indice des vides e0", '-');
-  const sigmaP = positif(d.sigmaP, 'La pression de preconsolidation sigmaP', 'kPa');
+  const sigmaP = positif(d.sigmaP, 'La pression de préconsolidation sigmaP', 'kPa');
   const sigmaF = sigma0 + dSigma;
 
   if (sigmaP <= sigma0) {
@@ -232,8 +232,8 @@ export interface ResultatCouches {
  * tranches de pas au plus 0,25 m. Chaque tranche est traitee au milieu, avec la
  * contrainte initiale cumulee depuis la base. L = null : L = 100 B.
  *
- * La pression de preconsolidation est obligatoire : sigmaP <= 0 leve avec le
- * mot « sigma » ; aucune valeur par defaut n'est inventee.
+ * La pression de préconsolidation est obligatoire : sigmaP <= 0 leve avec le
+ * mot « sigma » ; aucune valeur par défaut n'est inventee.
  */
 export function tassementCouches(d: DonneesCouches): ResultatCouches {
   positifOuNul(d.q, 'La surcharge q', 'kPa');
@@ -243,13 +243,13 @@ export function tassementCouches(d: DonneesCouches): ResultatCouches {
   const pas = positif(d.pas ?? 0.25, 'Le pas de decoupage', 'm');
 
   for (const c of d.couches) {
-    positif(c.h, "L'epaisseur de couche h", 'm');
+    positif(c.h, "L'épaisseur de couche h", 'm');
     positif(c.gammaEff, 'Le poids volumique effectif', 'kN/m3');
     positifOuNul(c.Cc, "L'indice de compression Cc", '-');
     positifOuNul(c.Cs, "L'indice de gonflement Cs", '-');
     positif(c.e0, "L'indice des vides e0", '-');
     if (!(Number.isFinite(c.sigmaP) && c.sigmaP > 0)) {
-      throw new Error('La pression de preconsolidation sigmaP doit être un nombre strictement positif (kPa) : aucune valeur par defaut.');
+      throw new Error('La pression de préconsolidation sigmaP doit être un nombre strictement positif (kPa) : aucune valeur par défaut.');
     }
   }
 
