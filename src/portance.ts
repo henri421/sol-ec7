@@ -144,7 +144,7 @@ export function portanceDrainee1g(d: DonneesPortanceDrainee): ResultatPortanceDr
   const base = Math.max(0, 1 - d.T / (d.N + (aire * d.c) / t));
   const iq = base ** m;
   const igamma = base ** (m + 1);
-  const ic = iq - (1 - iq) / (Nc * t);
+  const ic = Math.max(0, iq - (1 - iq) / (Nc * t));
   const dq = 1;
   const dc = 1;
 
@@ -167,7 +167,7 @@ export function portanceDrainee2g(d: DonneesPortanceDrainee & { Df?: number }): 
   const base = Math.max(0, 1 - d.T / d.N);
   const iq = base ** m;
   const igamma = base ** (m + 1);
-  const ic = iq - (1 - iq) / (Nc * t);
+  const ic = Math.max(0, iq - (1 - iq) / (Nc * t));
 
   let dq = 1;
   let dc = 1;
