@@ -19,7 +19,7 @@ function positifOuNul(v: number, nom: string, unite: string): number {
 
 function verifierPhi(phi: number): number {
   if (!(Number.isFinite(phi) && phi > 0 && phi < Math.PI / 2)) {
-    throw new Error("L'angle de frottement phi doit être strictement positif et inferieur a pi/2 (rad).");
+    throw new Error("L'angle de frottement phi doit être strictement positif et inférieur à pi/2 (rad).");
   }
   return phi;
 }
@@ -210,7 +210,7 @@ function donneesNonDrainees(d: DonneesPortanceNonDrainee): void {
   positif(d.Bp, 'La largeur efficace', 'm');
   if (d.Lp !== null) positif(d.Lp, 'La longueur efficace', 'm');
   positifOuNul(d.T, "L'effort horizontal", 'kN');
-  positif(d.cu, 'La cohésion non drainee cu', 'kPa');
+  positif(d.cu, 'La cohésion non drainée cu', 'kPa');
   positifOuNul(d.q, 'La contrainte au niveau de la base', 'kPa');
 }
 
