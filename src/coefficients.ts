@@ -62,6 +62,24 @@ export interface Profil1g {
   R1: JeuResistance;
   R2: JeuResistance;
   R3: JeuResistance;
+  /** gamma_R;e de la stabilite generale (tableau A.14), par jeu R1, R2, R3. */
+  Re: { R1: ValeurSourcee; R2: ValeurSourcee; R3: ValeurSourcee };
+  /** Approche imposee par le profil (ANB 2022 : DA1). Absente : toutes les approches. */
+  approcheImposee?: Approche;
+}
+
+export type Risque = 'faible' | 'normal' | 'eleve';
+
+/** Combinaison de stabilite generale (talus), coefficients resolus. */
+export interface CombinaisonStabilite {
+  /** 'DA1-1' | 'DA1-2' | 'DA2' | 'DA3' | 'VC3 + M2'. */
+  nom: string;
+  /** Effets : facteurs sur le moment moteur. Actions : facteurs sur les charges. */
+  mode: 'effets' | 'actions';
+  actions: JeuActions;
+  sol: JeuSol;
+  /** gamma_R;e, divise le facteur de securite calcule. */
+  gRe: ValeurSourcee;
 }
 
 export interface Profil2g {
@@ -133,6 +151,58 @@ export function profil1g(): Profil1g {
     R1: resistance(`${tA5}, jeu R1`, 1.0, 1.0),
     R2: resistance(`${tA5}, jeu R2`, 1.4, 1.1),
     R3: resistance(`${tA5}, jeu R3`, 1.0, 1.0),
+    Re: {
+      R1: { valeur: 1.0, source: 'EN 1997-1:2004, tableau A.14, valeur recommandée, jeu R1' },
+      R2: { valeur: 1.1, source: 'EN 1997-1:2004, tableau A.14, valeur recommandée, jeu R2' },
+      R3: { valeur: 1.0, source: 'EN 1997-1:2004, tableau A.14, valeur recommandée, jeu R3' },
+    },
+  };
+}
+
+/**
+ * Profil 1re generation, NBN EN 1997-1 ANB:2022 (DA1 imposee). EQU, A1, M1, R1 a R3
+ * comme profil1g() ; A2 : gamma_G 1,0 et gamma_Q 1,10 (tableau A.3 ANB) ; M2 selon
+ * le risque (tableaux A.4, A.4-bis, A.4-ter ANB) : la classe de risque est un choix
+ * de l'utilisateur, jamais une valeur par defaut.
+ */
+export function profilAnb2022(risque: Risque): Profil1g {
+  const t = (tab: string) => `NBN EN 1997-1 ANB:2022, tableau ${tab}`;
+  const m2 = {
+    faible: { phi: 1.1, c: 1.1, cu: 1.25, tab: 'A.4-bis ANB' },
+    normal: { phi: 1.25, c: 1.25, cu: 1.4, tab: 'A.4 ANB' },
+    eleve: { phi: 1.4, c: 1.4, cu: 1.55, tab: 'A.4-ter ANB' },
+  }[risque];
+  if (!m2) throw new Error(`Risque inconnu : ${String(risque)} (attendu : faible, normal ou eleve).`);
+  const tA1 = t('A.1 ANB');
+  const tA2 = t('A.2 ANB');
+  const tA3 = t('A.3 ANB');
+  const tA4 = t('A.4 ANB');
+  const tA5 = t('A.5 ANB');
+  const tA14 = t('A.14 ANB');
+  return {
+    nom: `NBN EN 1997-1 ANB:2022, risque ${risque}, DA1 imposée`,
+    date: '2026-11-06',
+    EQU: {
+      actions: actions(tA1, 1.1, 0.9, 1.5),
+      sol: sol(tA2, 1.25, 1.25, 1.4),
+    },
+    A1: actions(`${tA3}, jeu A1`, 1.35, 1.0, 1.5),
+    A2: actions(`${tA3}, jeu A2`, 1.0, 1.0, 1.1),
+    M1: sol(tA4, 1.0, 1.0, 1.0, 'jeu M1'),
+    M2: {
+      gPhi: { valeur: m2.phi, source: `${t(m2.tab)}, jeu M2` },
+      gC: { valeur: m2.c, source: `${t(m2.tab)}, jeu M2` },
+      gCu: { valeur: m2.cu, source: `${t(m2.tab)}, jeu M2` },
+    },
+    R1: resistance(`${tA5}, jeu R1`, 1.0, 1.0),
+    R2: resistance(`${tA5}, jeu R2`, 1.4, 1.1),
+    R3: resistance(`${tA5}, jeu R3`, 1.0, 1.0),
+    Re: {
+      R1: { valeur: 1.0, source: `${tA14}, jeu R1` },
+      R2: { valeur: 1.1, source: `${tA14}, jeu R2` },
+      R3: { valeur: 1.0, source: `${tA14}, jeu R3` },
+    },
+    approcheImposee: 'DA1',
   };
 }
 
@@ -150,6 +220,7 @@ export function verifierProfil1g(p: Profil1g): void {
   const jeux: [string, object][] = [
     ['EQU actions', p.EQU.actions], ['EQU sol', p.EQU.sol],
     ['A1', p.A1], ['A2', p.A2], ['M1', p.M1], ['M2', p.M2], ['R1', p.R1], ['R2', p.R2], ['R3', p.R3],
+    ['Re', p.Re],
   ];
   for (const [nom, j] of jeux) {
     for (const [cle, v] of Object.entries(j) as [string, ValeurSourcee][]) {
@@ -188,6 +259,45 @@ export function combinaisons1g(approche: Approche, p: Profil1g): Combinaison[] {
     return [{ nom: 'DA2', geotechnique: p.A1, structure: p.A1, sol: p.M1, resistance: p.R2 }];
   }
   return [{ nom: 'DA3', geotechnique: p.A2, structure: p.A1, sol: p.M2, resistance: p.R3 }];
+}
+
+/**
+ * Combinaisons de stabilite generale de la 1re generation (EN 1997-1:2004, 2.4.7.3.4
+ * et 11) : DA1-1 et DA1-2, DA2, DA3. Le mode « effets » applique les facteurs sur le
+ * moment moteur (DA1-1, DA2) ; le mode « actions » les applique sur les charges.
+ * Leve si le profil impose une autre approche (ANB 2022 : DA1).
+ */
+export function combinaisonsStabilite1g(approche: Approche, p: Profil1g): CombinaisonStabilite[] {
+  if (p.approcheImposee !== undefined && p.approcheImposee !== approche) {
+    throw new Error(`Le profil ${p.nom} impose l'approche ${p.approcheImposee} ; l'approche ${approche} est refusée.`);
+  }
+  if (approche === 'DA1') {
+    return [
+      { nom: 'DA1-1', mode: 'effets', actions: p.A1, sol: p.M1, gRe: p.Re.R1 },
+      { nom: 'DA1-2', mode: 'actions', actions: p.A2, sol: p.M2, gRe: p.Re.R1 },
+    ];
+  }
+  if (approche === 'DA2') {
+    return [{ nom: 'DA2', mode: 'effets', actions: p.A1, sol: p.M1, gRe: p.Re.R2 }];
+  }
+  return [{ nom: 'DA3', mode: 'actions', actions: p.A2, sol: p.M2, gRe: p.Re.R3 }];
+}
+
+/**
+ * Combinaison de stabilite generale de la 2e generation : VC3 + M2, par l'approche
+ * des materiaux (EN 1997-3:2025, 4.6.3 et tableau 4.2). Actions VC3 sans k_F ; sol M2
+ * multiplie par k_M ; pas de facteur de resistance.
+ */
+export function combinaisonsStabilite2g(cc: ClasseConsequences, p: Profil2g): CombinaisonStabilite[] {
+  const kM = p.kM[cc];
+  const m2k = fois(p.gM2, kM);
+  return [{
+    nom: 'VC3 + M2',
+    mode: 'actions',
+    actions: actions2g(p.gG_VC3, p.gG_fav, p.gQ_VC3),
+    sol: { gPhi: m2k, gC: m2k, gCu: fois(p.gCuM2, kM) },
+    gRe: { valeur: 1, source: 'EN 1997-3:2025, tableau 4.2, approche par les matériaux, sans facteur de résistance' },
+  }];
 }
 
 const SOURCE_90 = 'EN 1990:2023, tableau A.1.8, valeur recommandée';
