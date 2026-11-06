@@ -1,0 +1,437 @@
+/**
+ * Stabilite generale d'un talus, d'un deblai ou d'un remblai en deformation plane :
+ * methode de Bishop simplifiee sur des cercles (EN 1997-1:2004, section 11 et
+ * annexe A ; EN 1997-3:2025, 4.6.3). Noyau pur, sans dependance.
+ *
+ * Unites : m, kN/m, kPa, kN/m3 ; angles en radians. x horizontal croissant, y altitude.
+ * Tranches : W poids propre du sol (kN/m), G surcharge permanente (kN/m), Q surcharge
+ * variable (kN/m), toutes caracteristiques ; u pression interstitielle a la base (kPa).
+ *
+ * Choix de modelisation : arc de glissement = partie de l'arc inferieur du cercle sous
+ * le terrain, sans reprise de la partie superieure ; tranches a midpoint, poids integre
+ * par morceaux entre les couches et la ligne piezometrique, ce qui suit la geometrie
+ * au nombre de tranches retenu.
+ */
+import type { CombinaisonStabilite } from './coefficients';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** Couche a limites horizontales, cotes de base, triees du haut vers le bas. */
+export interface CoucheTalus {
+  nom: string;
+  /** Cote de la base de la couche (m). */
+  base: number;
+  gamma: number;
+  gammaSat: number;
+  drainage: 'draine' | 'non_draine';
+  /** Draine : phi' en radians, dans ]0 ; pi/2[. */
+  phi?: number;
+  /** Draine : c' >= 0 (kPa). */
+  c?: number;
+  /** Non draine : cu > 0 (kPa). */
+  cu?: number;
+}
+
+/** Bande de charge uniforme sur le terrain, q en kPa, nature permanente (G) ou variable (Q). */
+export interface Bande {
+  x0: number;
+  x1: number;
+  q: number;
+  nature: 'G' | 'Q';
+}
+
+export interface Cercle {
+  xc: number;
+  yc: number;
+  R: number;
+}
+
+export interface DonneesBishop {
+  profil: Point[];
+  couches: CoucheTalus[];
+  /** Ligne piezometrique polyligne, ou null (sol sec). */
+  piezo: Point[] | null;
+  gammaW: number;
+  bandes: Bande[];
+  combinaison: CombinaisonStabilite;
+  /** Nombre de tranches, defaut 50 : le meme pour la recherche et le cercle rendu. */
+  nbTranches?: number;
+}
+
+export interface Tranche {
+  /** Milieu de la tranche (m). */
+  x: number;
+  b: number;
+  ySol: number;
+  yBase: number;
+  /** Pente de la base (rad), positive quand la base remonte vers la droite. */
+  alpha: number;
+  W: number;
+  G: number;
+  Q: number;
+  /** Vrai si la surcharge variable est comptee (faux si elle stabilise). */
+  qRetenue: boolean;
+  u: number;
+  materiau: string;
+  mAlpha: number;
+}
+
+export type ResultatCercle =
+  | {
+      valide: true;
+      F: number;
+      taux: number;
+      sens: 1 | -1;
+      momentMoteur: number;
+      tranches: Tranche[];
+      avertissements: string[];
+    }
+  | { valide: false; motif: string };
+
+export interface OptionsRecherche {
+  coteLimite?: number;
+}
+
+const NB_TRANCHES_DEFAUT = 50;
+const ITERATIONS_MAX = 200;
+const TOLERANCE_F = 1e-7;
+/** Borne basse de m_alpha : une sortie plus raide est bornee, avec avertissement. */
+const M_ALPHA_MIN = 0.2;
+const EPS = 1e-9;
+
+/** Interpolation lineaire sur une polyligne ; hors de son emprise, prolongement horizontal. */
+function interpoler(pts: Point[], x: number): number {
+  if (x <= pts[0].x) return pts[0].y;
+  const dernier = pts[pts.length - 1];
+  if (x >= dernier.x) return dernier.y;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[i + 1];
+    if (x <= q.x) return p.y + ((q.y - p.y) * (x - p.x)) / (q.x - p.x);
+  }
+  return dernier.y;
+}
+
+/** Cote de l'arc inferieur du cercle en x (x dans [xc - R ; xc + R]). */
+function ordonneeArc(c: Cercle, x: number): number {
+  return c.yc - Math.sqrt(Math.max(0, c.R * c.R - (x - c.xc) * (x - c.xc)));
+}
+
+/** Leve sur une saisie incoherente, en nommant la grandeur fautive. */
+function verifierDonnees(d: DonneesBishop): number {
+  const n = d.nbTranches ?? NB_TRANCHES_DEFAUT;
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error('Le nombre de tranches doit être un entier au moins égal à 1.');
+  }
+  if (!d.profil || d.profil.length < 2) {
+    throw new Error('Le profil du talus doit compter au moins 2 points.');
+  }
+  for (let i = 1; i < d.profil.length; i++) {
+    if (!(d.profil[i].x > d.profil[i - 1].x)) {
+      throw new Error('Les x du profil doivent être strictement croissants.');
+    }
+  }
+  if (!d.couches || d.couches.length === 0) {
+    throw new Error('Au moins une couche est nécessaire.');
+  }
+  d.couches.forEach((c, k) => {
+    if (!(c.gamma > 0) || !(c.gammaSat > 0)) {
+      throw new Error(`Les poids volumiques de la couche ${c.nom} doivent être strictement positifs (kN/m³).`);
+    }
+    if (k > 0 && !(c.base < d.couches[k - 1].base)) {
+      throw new Error(`Les cotes de base des couches doivent être strictement décroissantes, du haut vers le bas (couche ${c.nom}).`);
+    }
+    if (c.drainage === 'draine') {
+      if (c.phi === undefined || !(c.phi > 0 && c.phi < Math.PI / 2)) {
+        throw new Error(`L'angle de frottement φ' de la couche ${c.nom} doit être dans ]0 ; π/2[ (rad).`);
+      }
+      if (c.c === undefined) {
+        throw new Error(`La cohésion c' de la couche ${c.nom} est absente.`);
+      }
+      if (!(c.c >= 0)) {
+        throw new Error(`La cohésion c' de la couche ${c.nom} doit être positive ou nulle (kPa).`);
+      }
+    } else {
+      if (c.cu === undefined || !(c.cu > 0)) {
+        throw new Error(`La résistance non drainée cu de la couche ${c.nom} doit être strictement positive (kPa).`);
+      }
+    }
+  });
+  if (d.piezo) {
+    if (d.piezo.length < 2) {
+      throw new Error('La ligne piézométrique doit compter au moins 2 points.');
+    }
+    for (let i = 1; i < d.piezo.length; i++) {
+      if (!(d.piezo[i].x > d.piezo[i - 1].x)) {
+        throw new Error('Les x de la ligne piézométrique doivent être strictement croissants.');
+      }
+    }
+  }
+  if (!(d.gammaW > 0)) {
+    throw new Error('Le poids volumique de l\'eau doit être strictement positif (kN/m³).');
+  }
+  for (const bd of d.bandes) {
+    if (!(bd.x0 < bd.x1)) {
+      throw new Error('Une bande de charge doit avoir x0 < x1.');
+    }
+    if (!(bd.q >= 0)) {
+      throw new Error('La charge q d\'une bande doit être positive ou nulle (kPa).');
+    }
+  }
+  return n;
+}
+
+function verifierCercle(c: Cercle): void {
+  if (!Number.isFinite(c.xc) || !Number.isFinite(c.yc)) {
+    throw new Error('Le centre du cercle doit avoir des coordonnées finies (m).');
+  }
+  if (!(c.R > 0) || !Number.isFinite(c.R)) {
+    throw new Error('Le rayon du cercle doit être strictement positif (m).');
+  }
+}
+
+/**
+ * Arc de glissement : partie de l'arc inferieur du cercle sous le terrain. Rend
+ * l'abscisse de ses deux extremites, ou le motif d'invalidite. Les racines sont
+ * calculees exactement sur chaque segment du profil (intersection droite-cercle) ;
+ * le signe de « terrain - arc » est lu au milieu de chaque morceau.
+ */
+function arcSousTerrain(profil: Point[], c: Cercle): { xa: number; xb: number } | string {
+  const { xc, yc, R } = c;
+  const X0 = profil[0].x;
+  const X1 = profil[profil.length - 1].x;
+  const gauche = xc - R;
+  const droite = xc + R;
+  const fg = Math.max(gauche, X0);
+  const fd = Math.min(droite, X1);
+  if (!(fg < fd)) return 'le cercle ne coupe pas le terrain';
+
+  const bornes = [fg, fd];
+  for (let i = 0; i + 1 < profil.length; i++) {
+    const p = profil[i];
+    const q = profil[i + 1];
+    const s = (q.y - p.y) / (q.x - p.x);
+    const b0 = p.y - s * p.x;
+    const A = 1 + s * s;
+    const B = 2 * (s * (b0 - yc) - xc);
+    const C = xc * xc + (b0 - yc) * (b0 - yc) - R * R;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) continue;
+    const racine = Math.sqrt(disc);
+    for (const x of [(-B - racine) / (2 * A), (-B + racine) / (2 * A)]) {
+      if (x < Math.max(p.x, fg) - EPS || x > Math.min(q.x, fd) + EPS) continue;
+      const xr = Math.min(Math.max(x, fg), fd);
+      // Seule la moitie inferieure du cercle borne le glissement.
+      if (s * xr + b0 <= yc + EPS) bornes.push(xr);
+    }
+  }
+  bornes.sort((a, b) => a - b);
+  const points: number[] = [];
+  for (const x of bornes) {
+    if (points.length === 0 || x - points[points.length - 1] > EPS) points.push(x);
+  }
+
+  const morceaux: [number, number][] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const m = (a + b) / 2;
+    const g = interpoler(profil, m) - ordonneeArc(c, m);
+    if (g > EPS) {
+      const dernier = morceaux[morceaux.length - 1];
+      if (dernier && dernier[1] === a) dernier[1] = b;
+      else morceaux.push([a, b]);
+    }
+  }
+  if (morceaux.length === 0) return 'le cercle ne coupe pas le terrain';
+  if (morceaux.length > 1) return 'le cercle coupe le terrain en plusieurs points';
+  const [xa, xb] = morceaux[0];
+  if (xa <= X0 + EPS || xb >= X1 - EPS) return 'l\'arc de glissement sort du profil';
+  if (xa <= gauche + EPS || xb >= droite - EPS) {
+    return 'l\'arc ne rejoint pas le terrain (le cercle reste sous le terrain)';
+  }
+  return { xa, xb };
+}
+
+/** Indice de la couche qui contient la cote y (la premiere dont la base est sous y). */
+function indiceCouche(couches: CoucheTalus[], y: number): number {
+  for (let k = 0; k < couches.length; k++) {
+    if (couches[k].base <= y) return k;
+  }
+  return couches.length - 1;
+}
+
+/**
+ * Poids de la colonne par unite de largeur de tranche (kPa = kN/m3 x m).
+ * Chaque couche est decoupee par la ligne piezometrique : gamma au-dessus, gammaSat
+ * au-dessous. L'eau au-dessus du terrain n'ajoute pas de poids (avertissement).
+ */
+function poidsColonne(couches: CoucheTalus[], yb: number, ys: number, pz: number): number {
+  let surface = 0;
+  for (let k = 0; k < couches.length; k++) {
+    const haut = k === 0 ? Infinity : couches[k - 1].base;
+    const bas = k === couches.length - 1 ? -Infinity : couches[k].base;
+    const lo = Math.max(yb, bas);
+    const hi = Math.min(ys, haut);
+    if (hi <= lo) continue;
+    const sat = Math.max(0, Math.min(hi, pz) - lo);
+    const sec = hi - lo - sat;
+    surface += couches[k].gamma * sec + couches[k].gammaSat * sat;
+  }
+  return surface;
+}
+
+/**
+ * Analyse d'un cercle, donnees deja verifiees. Bishop simplifie :
+ * F = [sum T_i / m_i(F)] / sum(W_i sin alpha_i), iteree jusqu'a |dF| < 1e-7.
+ * T_i = c_d b + (W_i - u_i b) tan phi_d (drainee) ; T_i = c_u,d b (non drainee).
+ * m_i = cos alpha_i + sens sin alpha_i tan phi_d / F. Les surcharges variables suivent
+ * le sens du glissement : tranche motrice (sin alpha du meme signe que le sens) ou
+ * stabilisatrice (gamma_Q,stb = 0). Les charges permanentes prennent gamma_G,dst sur
+ * toutes les tranches en mode « effets » : l'attendu du test T2 (cas A, DA2 ; cas B,
+ * DA1-1) ne tient pas avec gamma_G,stb sur les tranches stabilisatrices (point douteux
+ * dans HANDOFF.md).
+ */
+function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
+  const arc = arcSousTerrain(d.profil, c);
+  if (typeof arc === 'string') return { valide: false, motif: arc };
+
+  const b = (arc.xb - arc.xa) / n;
+  const avertissements: string[] = [];
+  const tranches: Tranche[] = [];
+  const indices: number[] = [];
+  let sommeCharge = 0;
+  let eauAuDessus = false;
+
+  for (let i = 0; i < n; i++) {
+    const xm = arc.xa + (i + 0.5) * b;
+    const ys = interpoler(d.profil, xm);
+    const yb = ordonneeArc(c, xm);
+    const alpha = Math.asin(Math.min(1, Math.max(-1, (xm - c.xc) / c.R)));
+    const pz = d.piezo ? interpoler(d.piezo, xm) : -Infinity;
+    if (pz > ys + EPS) eauAuDessus = true;
+    const W = b * poidsColonne(d.couches, yb, ys, pz);
+    const u = pz > yb ? d.gammaW * (pz - yb) : 0;
+    let G = 0;
+    let Q = 0;
+    for (const bd of d.bandes) {
+      const recouvrement = Math.max(0, Math.min(bd.x1, xm + b / 2) - Math.max(bd.x0, xm - b / 2));
+      if (bd.nature === 'G') G += bd.q * recouvrement;
+      else Q += bd.q * recouvrement;
+    }
+    const k = indiceCouche(d.couches, yb);
+    indices.push(k);
+    tranches.push({
+      x: xm, b, ySol: ys, yBase: yb, alpha, W, G, Q,
+      qRetenue: true, u, materiau: d.couches[k].nom, mAlpha: 0,
+    });
+    sommeCharge += (W + G + Q) * Math.sin(alpha);
+  }
+  if (eauAuDessus) {
+    avertissements.push('eau au-dessus du terrain : son poids et sa poussée ne sont pas modélisés');
+  }
+
+  const sens: 1 | -1 = sommeCharge >= 0 ? 1 : -1;
+  const cb = d.combinaison;
+  const actions = cb.actions;
+  const surEffets = cb.mode === 'effets';
+
+  // Facteurs de charges et numerateur (charges factorisees, ou caracteristiques en mode effets).
+  const Wn: number[] = [];
+  let moment = 0;
+  for (let i = 0; i < n; i++) {
+    const t = tranches[i];
+    const sinA = Math.sin(t.alpha);
+    const motrice = sinA * sens >= 0;
+    t.qRetenue = motrice;
+    const gG = motrice || surEffets ? actions.gG_dst.valeur : actions.gG_stb.valeur;
+    const gQ = motrice ? actions.gQ_dst.valeur : actions.gQ_stb.valeur;
+    const charges = gG * (t.W + t.G) + gQ * t.Q;
+    Wn.push(surEffets ? t.W + t.G + (motrice ? t.Q : 0) : charges);
+    moment += charges * sinA;
+  }
+  const D = sens * moment;
+  if (!(D > 0)) {
+    return { valide: false, motif: 'moment moteur nul ou négatif dans le sens du glissement' };
+  }
+
+  // Termes resistants T_i et tangentes de calcul par tranche.
+  const tanPhi: number[] = [];
+  const T: number[] = [];
+  const cosA: number[] = [];
+  const sinA: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = tranches[i];
+    const couche = d.couches[indices[i]];
+    cosA.push(Math.cos(t.alpha));
+    sinA.push(Math.sin(t.alpha));
+    if (couche.drainage === 'draine') {
+      const tp = Math.tan(couche.phi as number) / cb.sol.gPhi.valeur;
+      const cd = (couche.c as number) / cb.sol.gC.valeur;
+      tanPhi.push(tp);
+      T.push(cd * t.b + (Wn[i] - t.u * t.b) * tp);
+    } else {
+      tanPhi.push(0);
+      T.push(((couche.cu as number) / cb.sol.gCu.valeur) * t.b);
+    }
+  }
+
+  // alpha est compte positif dans le sens du glissement (sens * sin alpha, comme dans D).
+  const mAlpha = (i: number, F: number): number => cosA[i] + (sens * sinA[i] * tanPhi[i]) / F;
+  let F = 1;
+  let converge = false;
+  for (let it = 0; it < ITERATIONS_MAX; it++) {
+    let numerateur = 0;
+    for (let i = 0; i < n; i++) {
+      numerateur += T[i] / Math.max(M_ALPHA_MIN, mAlpha(i, F));
+    }
+    const Fn = numerateur / D;
+    if (!Number.isFinite(Fn) || Fn <= 0) {
+      return { valide: false, motif: 'F non physique (numérateur nul ou négatif)' };
+    }
+    if (Math.abs(Fn - F) < TOLERANCE_F) {
+      F = Fn;
+      converge = true;
+      break;
+    }
+    F = Fn;
+  }
+  if (!converge) {
+    return { valide: false, motif: `Bishop ne converge pas en ${ITERATIONS_MAX} itérations` };
+  }
+
+  let sortieRaide = false;
+  for (let i = 0; i < n; i++) {
+    const brut = mAlpha(i, F);
+    if (brut < M_ALPHA_MIN) sortieRaide = true;
+    tranches[i].mAlpha = Math.max(M_ALPHA_MIN, brut);
+  }
+  if (sortieRaide) {
+    avertissements.push('m_α borné à 0,2 : sortie de glissement raide');
+  }
+
+  return {
+    valide: true,
+    F,
+    taux: cb.gRe.valeur / F,
+    sens,
+    momentMoteur: D * c.R,
+    tranches,
+    avertissements,
+  };
+}
+
+/**
+ * Stabilite d'un cercle donne : F, taux = gamma_R;e / F, tranches et avertissements.
+ * Rend { valide: false, motif } pour un cercle sans arc de glissement valable (hors
+ * du terrain, sortie du profil, non convergence, moment moteur nul). Leve sur une
+ * saisie incoherente (profil, couches, bandes, cercle), en francais.
+ */
+export function analyserCercle(d: DonneesBishop, c: Cercle): ResultatCercle {
+  const n = verifierDonnees(d);
+  verifierCercle(c);
+  return analyser(d, c, n);
+}

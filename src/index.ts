@@ -4,3 +4,4 @@ export * from './coefficients';
 export * from './terrain';
 export * from './portance';
 export * from './tassement';
+export * from './stabilite';
