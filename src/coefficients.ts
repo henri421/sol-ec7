@@ -181,7 +181,7 @@ export function profilAnb2022(risque: Risque): Profil1g {
   const horsAnb = 'absent de l\'ANB:2022 (DA1 imposée) : EN 1997-1:2004, valeur recommandée';
   const tA14 = t('A.14 ANB');
   return {
-    nom: `NBN EN 1997-1 ANB:2022, risque ${risque}, DA1 imposée`,
+    nom: `NBN EN 1997-1 ANB:2022, risque ${{ faible: 'faible', normal: 'normal', eleve: 'élevé' }[risque]}, DA1 imposée`,
     date: '2026-11-06',
     EQU: {
       actions: actions(tA1, 1.1, 0.9, 1.5),
