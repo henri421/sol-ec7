@@ -290,10 +290,10 @@ function poidsColonne(couches: CoucheTalus[], yb: number, ys: number, pz: number
  * T_i = c_d b + (W_i - u_i b) tan phi_d (drainee) ; T_i = c_u,d b (non drainee).
  * m_i = cos alpha_i + sens sin alpha_i tan phi_d / F. Les surcharges variables suivent
  * le sens du glissement : tranche motrice (sin alpha du meme signe que le sens) ou
- * stabilisatrice (gamma_Q,stb = 0). Les charges permanentes prennent gamma_G,dst sur
- * toutes les tranches en mode « effets » : l'attendu du test T2 (cas A, DA2 ; cas B,
- * DA1-1) ne tient pas avec gamma_G,stb sur les tranches stabilisatrices (point douteux
- * dans HANDOFF.md).
+ * stabilisatrice (gamma_Q,stb = 0). Mode « effets » (DA1-1, DA2) : gamma_G,dst porte
+ * sur l'effet, le moment moteur net des charges permanentes (poids du sol, action de
+ * source unique), pas tranche par tranche ; le numerateur garde les poids
+ * caracteristiques (EN 1997-1:2004, 2.4.7.3.2 et 11.5.1).
  */
 function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
   const arc = arcSousTerrain(d.profil, c);
@@ -372,7 +372,9 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
       const tp = Math.tan(couche.phi as number) / cb.sol.gPhi.valeur;
       const cd = (couche.c as number) / cb.sol.gC.valeur;
       tanPhi.push(tp);
-      T.push(cd * t.b + (Wn[i] - t.u * t.b) * tp);
+      // Effort normal effectif borne a 0 : une sous-pression superieure au poids ne cree
+      // pas de frottement negatif.
+      T.push(cd * t.b + Math.max(0, Wn[i] - t.u * t.b) * tp);
     } else {
       tanPhi.push(0);
       T.push(((couche.cu as number) / cb.sol.gCu.valeur) * t.b);

@@ -178,6 +178,7 @@ export function profilAnb2022(risque: Risque): Profil1g {
   const tA3 = t('A.3 ANB');
   const tA4 = t('A.4 ANB');
   const tA5 = t('A.5 ANB');
+  const horsAnb = 'absent de l\'ANB:2022 (DA1 imposée) : EN 1997-1:2004, valeur recommandée';
   const tA14 = t('A.14 ANB');
   return {
     nom: `NBN EN 1997-1 ANB:2022, risque ${risque}, DA1 imposée`,
@@ -195,12 +196,14 @@ export function profilAnb2022(risque: Risque): Profil1g {
       gCu: { valeur: m2.cu, source: `${t(m2.tab)}, jeu M2` },
     },
     R1: resistance(`${tA5}, jeu R1`, 1.0, 1.0),
-    R2: resistance(`${tA5}, jeu R2`, 1.4, 1.1),
-    R3: resistance(`${tA5}, jeu R3`, 1.0, 1.0),
+    // L'ANB ne donne que R1 (DA1 imposee) : R2 et R3 gardent la valeur recommandee
+    // de 2004 pour completer le type, et ne servent jamais (combinaisonsStabilite1g leve).
+    R2: resistance(`${horsAnb}, tableau A.5, jeu R2`, 1.4, 1.1),
+    R3: resistance(`${horsAnb}, tableau A.5, jeu R3`, 1.0, 1.0),
     Re: {
       R1: { valeur: 1.0, source: `${tA14}, jeu R1` },
-      R2: { valeur: 1.1, source: `${tA14}, jeu R2` },
-      R3: { valeur: 1.0, source: `${tA14}, jeu R3` },
+      R2: { valeur: 1.1, source: `${horsAnb}, tableau A.14, jeu R2` },
+      R3: { valeur: 1.0, source: `${horsAnb}, tableau A.14, jeu R3` },
     },
     approcheImposee: 'DA1',
   };
