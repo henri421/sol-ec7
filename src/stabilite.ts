@@ -435,3 +435,90 @@ export function analyserCercle(d: DonneesBishop, c: Cercle): ResultatCercle {
   verifierCercle(c);
   return analyser(d, c, n);
 }
+
+/**
+ * Recherche du cercle critique : grille de centres au-dessus du profil et de rayons
+ * balayes jusqu'a la cote limite, puis raffinement par motifs (pas divise par 2 jusqu'a
+ * 0,05 m) depuis les trois meilleurs cercles de la grille. Les cercles invalides sont
+ * ecartes. Le resultat rendu est celui de analyserCercle sur le cercle rendu, au meme
+ * nombre de tranches. Cote limite par defaut : la plus haute de la base de la derniere
+ * couche et de y_bas - 3H (H = hauteur du profil). Rend null si aucun cercle n'est valide.
+ * Point de depart : fondbis, src/briques/stabiliteGenerale.ts, adapte au noyau.
+ */
+export function rechercherCercleCritique(
+  d: DonneesBishop,
+  o: OptionsRecherche = {}
+): { cercle: Cercle; resultat: Extract<ResultatCercle, { valide: true }>; nbCercles: number } | null {
+  const n = verifierDonnees(d);
+  const profil = d.profil;
+  const xMin = profil[0].x;
+  const xMax = profil[profil.length - 1].x;
+  const yHaut = Math.max(...profil.map((p) => p.y));
+  const yBas = Math.min(...profil.map((p) => p.y));
+  const H = Math.max(yHaut - yBas, (xMax - xMin) / 10, 1);
+  const coteLimite = o.coteLimite ?? Math.max(d.couches[d.couches.length - 1].base, yBas - 3 * H);
+
+  let nbCercles = 0;
+  const evaluer = (c: Cercle): Extract<ResultatCercle, { valide: true }> | null => {
+    if (c.R <= 0.1 || c.yc - c.R < coteLimite - EPS) return null;
+    nbCercles++;
+    const r = analyser(d, c, n);
+    return r.valide ? r : null;
+  };
+
+  // 1. Grille de centres et de rayons.
+  const candidats: { c: Cercle; F: number }[] = [];
+  const nx = 14;
+  const ny = 8;
+  const nr = 10;
+  for (let i = 0; i <= nx; i++) {
+    const xc = xMin + ((xMax - xMin) * i) / nx;
+    for (let j = 0; j <= ny; j++) {
+      const yc = yHaut + 0.2 * H + (2.8 * H * j) / ny;
+      const rMin = yc - yHaut + 0.05 * H;
+      const rMax = yc - coteLimite;
+      if (rMax <= rMin) continue;
+      for (let k = 0; k <= nr; k++) {
+        const c: Cercle = { xc, yc, R: rMin + ((rMax - rMin) * k) / nr };
+        const r = evaluer(c);
+        if (r) candidats.push({ c, F: r.F });
+      }
+    }
+  }
+  if (candidats.length === 0) return null;
+  candidats.sort((a, b) => a.F - b.F);
+
+  // 2. Raffinement par motifs depuis les trois meilleurs.
+  const pasInitial = Math.max((xMax - xMin) / nx, H / 4);
+  const directions = [
+    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], [0, 1, 1], [0, -1, -1],
+  ];
+  let meilleur = candidats[0];
+  for (const depart of candidats.slice(0, 3)) {
+    let courant = depart;
+    let pas = pasInitial;
+    let coups = 0;
+    while (pas > 0.05 && coups < 2000) {
+      let ameliore = false;
+      for (const [dxc, dyc, dR] of directions) {
+        const c: Cercle = {
+          xc: courant.c.xc + dxc * pas,
+          yc: courant.c.yc + dyc * pas,
+          R: courant.c.R + dR * pas,
+        };
+        const r = evaluer(c);
+        if (r && r.F < courant.F - 1e-6) {
+          courant = { c, F: r.F };
+          ameliore = true;
+          coups++;
+        }
+      }
+      if (!ameliore) pas /= 2;
+    }
+    if (courant.F < meilleur.F) meilleur = courant;
+  }
+
+  const resultat = analyser(d, meilleur.c, n);
+  if (!resultat.valide) return null;
+  return { cercle: meilleur.c, resultat, nbCercles };
+}
