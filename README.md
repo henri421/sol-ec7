@@ -25,7 +25,7 @@ Unités : m, kN, kPa, kN/m³ ; angles en radians.
 ## Utilisation
 
 ```json
-"devDependencies": { "sol-ec7": "github:henri421/sol-ec7#v0.1.0" }
+"devDependencies": { "sol-ec7": "github:henri421/sol-ec7#v0.2.0" }
 ```
 
 ```ts
