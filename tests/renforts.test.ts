@@ -154,4 +154,14 @@ describe('T1 : forces des armatures (annexe F.3.1)', () => {
     const refait = analyserCercle(mur({ zones: [ZONE], renforts: renforts(1, 1, 1) }), avec!.cercle);
     expect(refait.valide && refait.F).toBeCloseTo(avec!.resultat.F, 10);
   });
+
+  it('xGaucheMax ecarte les cercles qui sortent par le parement', () => {
+    const d = mur({ zones: [ZONE], renforts: renforts(1, 1, 1), nbTranches: 200 });
+    const r = rechercherCercleCritique(d, { xGaucheMax: 1e-4 });
+    expect(r).not.toBeNull();
+    const t0 = r!.resultat.tranches[0];
+    expect(t0.x - t0.b / 2).toBeLessThanOrEqual(1e-4 + 1e-9);
+    const libre = rechercherCercleCritique(d);
+    expect(libre!.resultat.F).toBeLessThanOrEqual(r!.resultat.F + 1e-9);
+  });
 });

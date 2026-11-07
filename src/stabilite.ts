@@ -123,6 +123,11 @@ export type ResultatCercle =
 
 export interface OptionsRecherche {
   coteLimite?: number;
+  /**
+   * Abscisse maximale de l'extremite gauche de l'arc (m). Ecarte les cercles qui sortent plus
+   * a droite, par exemple par un parement retenu (mur en sol renforce : sortie au pied ou devant).
+   */
+  xGaucheMax?: number;
 }
 
 const NB_TRANCHES_DEFAUT = 50;
@@ -588,7 +593,12 @@ export function rechercherCercleCritique(
     if (c.R <= 0.1 || c.yc - c.R < coteLimite - EPS) return null;
     nbCercles++;
     const r = analyser(d, c, n);
-    return r.valide ? r : null;
+    if (!r.valide) return null;
+    if (o.xGaucheMax !== undefined) {
+      const t0 = r.tranches[0];
+      if (t0.x - t0.b / 2 > o.xGaucheMax + EPS) return null;
+    }
+    return r;
   };
 
   // 1. Grille de centres et de rayons.
