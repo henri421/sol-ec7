@@ -49,6 +49,30 @@ export interface Cercle {
   R: number;
 }
 
+/**
+ * Materiau impose dans x in [xMin ; xMax] et y >= yMin (massif renforce). Hors de toute
+ * zone, la couche de la hauteur s'applique. Premiere zone qui contient un point : elle gagne.
+ */
+export interface ZoneMateriau {
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  couche: CoucheTalus;
+}
+
+/**
+ * Lit d'armatures horizontal, de x0 a x1 a la cote y. Rt (kN/m) et rpo (kN/m par metre
+ * ancre) sont des valeurs de calcul, deja divisees par leurs gammas. Annexe F.3.1 de
+ * l'EN 1997-3:2025 : ces forces entrent dans Bishop sans multiplication par gammaG ni gammaQ.
+ */
+export interface Renfort {
+  y: number;
+  x0: number;
+  x1: number;
+  Rt: number;
+  rpo: number;
+}
+
 export interface DonneesBishop {
   profil: Point[];
   couches: CoucheTalus[];
@@ -59,6 +83,10 @@ export interface DonneesBishop {
   combinaison: CombinaisonStabilite;
   /** Nombre de tranches, defaut 50 : le meme pour la recherche et le cercle rendu. */
   nbTranches?: number;
+  /** Zones de materiau (massif renforce) ; absent ou vide : couches seules. */
+  zones?: ZoneMateriau[];
+  /** Lits d'armatures ; absent ou vide : aucune force. */
+  renforts?: Renfort[];
 }
 
 export interface Tranche {
@@ -88,6 +116,8 @@ export type ResultatCercle =
       momentMoteur: number;
       tranches: Tranche[];
       avertissements: string[];
+      /** Armatures comptees dans le cercle (sens = +1 seulement) ; [] sinon. */
+      renforts: { y: number; xCoupe: number; T: number }[];
     }
   | { valide: false; motif: string };
 
@@ -179,6 +209,39 @@ function verifierDonnees(d: DonneesBishop): number {
     }
     if (!(bd.q >= 0)) {
       throw new Error('La charge q d\'une bande doit être positive ou nulle (kPa).');
+    }
+  }
+  for (const z of d.zones ?? []) {
+    if (!(z.xMin < z.xMax)) {
+      throw new Error('Une zone de matériau doit avoir xMin < xMax (m).');
+    }
+    const cz = z.couche;
+    if (!(cz.gamma > 0) || !(cz.gammaSat > 0)) {
+      throw new Error(`Les poids volumiques de la couche ${cz.nom} de la zone doivent être strictement positifs (kN/m³).`);
+    }
+    if (cz.drainage === 'draine') {
+      if (cz.phi === undefined || !(cz.phi > 0 && cz.phi < Math.PI / 2)) {
+        throw new Error(`L'angle de frottement φ' de la couche ${cz.nom} de la zone doit être dans ]0 ; π/2[ (rad).`);
+      }
+      if (cz.c === undefined || !(cz.c >= 0)) {
+        throw new Error(`La cohésion c' de la couche ${cz.nom} de la zone doit être positive ou nulle (kPa).`);
+      }
+    } else if (cz.cu === undefined || !(cz.cu > 0)) {
+      throw new Error(`La résistance non drainée cu de la couche ${cz.nom} de la zone doit être strictement positive (kPa).`);
+    }
+  }
+  for (const r of d.renforts ?? []) {
+    if (!Number.isFinite(r.y) || !Number.isFinite(r.x0) || !Number.isFinite(r.x1)) {
+      throw new Error('Les cote et abscisses d\'un renfort doivent être finies (m).');
+    }
+    if (!(r.x0 < r.x1)) {
+      throw new Error('Un renfort doit avoir x0 < x1 (m).');
+    }
+    if (!(r.Rt >= 0)) {
+      throw new Error('La résistance de calcul Rt d\'un renfort doit être positive ou nulle (kN/m).');
+    }
+    if (!(r.rpo >= 0)) {
+      throw new Error('La résistance d\'arrachement rpo d\'un renfort doit être positive ou nulle (kN/m par m ancré).');
     }
   }
   return n;
@@ -285,6 +348,44 @@ function poidsColonne(couches: CoucheTalus[], yb: number, ys: number, pz: number
 }
 
 /**
+ * Couche qui porte le point (x, y) : la premiere zone qui le contient, sinon la couche de
+ * la hauteur. Sans zone, rend la meme couche que indiceCouche.
+ */
+function coucheEn(d: DonneesBishop, x: number, y: number): CoucheTalus {
+  for (const z of d.zones ?? []) {
+    if (x >= z.xMin && x <= z.xMax && y >= z.yMin) return z.couche;
+  }
+  return d.couches[indiceCouche(d.couches, y)];
+}
+
+/**
+ * Poids de colonne en présence de zones. La colonne est découpée aux cotes des couches,
+ * des zones et de la piézométrique ; chaque morceau prend le poids volumique de la couche
+ * qui porte son milieu. Même convention que poidsColonne (kPa = kN/m3 x m).
+ */
+function poidsColonneZones(d: DonneesBishop, xm: number, yb: number, ys: number, pz: number): number {
+  if (!(ys > yb)) return 0;
+  const coupures = [yb, ys];
+  for (const c of d.couches) coupures.push(c.base);
+  for (const z of d.zones ?? []) coupures.push(z.yMin);
+  if (Number.isFinite(pz)) coupures.push(pz);
+  const pts = coupures
+    .filter((y) => y >= yb && y <= ys)
+    .sort((a, b) => a - b)
+    .filter((y, i, tab) => i === 0 || y - tab[i - 1] > EPS);
+  let surface = 0;
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const lo = pts[k];
+    const hi = pts[k + 1];
+    const couche = coucheEn(d, xm, (lo + hi) / 2);
+    const sat = Math.max(0, Math.min(hi, pz) - lo);
+    const sec = hi - lo - sat;
+    surface += couche.gamma * sec + couche.gammaSat * sat;
+  }
+  return surface;
+}
+
+/**
  * Analyse d'un cercle, donnees deja verifiees. Bishop simplifie :
  * F = [sum T_i / m_i(F)] / sum(W_i sin alpha_i), iteree jusqu'a |dF| < 1e-7.
  * T_i = c_d b + (W_i - u_i b) tan phi_d (drainee) ; T_i = c_u,d b (non drainee).
@@ -302,9 +403,10 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
   const b = (arc.xb - arc.xa) / n;
   const avertissements: string[] = [];
   const tranches: Tranche[] = [];
-  const indices: number[] = [];
+  const couchesBase: CoucheTalus[] = [];
   let sommeCharge = 0;
   let eauAuDessus = false;
+  const avecZones = (d.zones?.length ?? 0) > 0;
 
   for (let i = 0; i < n; i++) {
     const xm = arc.xa + (i + 0.5) * b;
@@ -313,7 +415,7 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
     const alpha = Math.asin(Math.min(1, Math.max(-1, (xm - c.xc) / c.R)));
     const pz = d.piezo ? interpoler(d.piezo, xm) : -Infinity;
     if (pz > ys + EPS) eauAuDessus = true;
-    const W = b * poidsColonne(d.couches, yb, ys, pz);
+    const W = b * (avecZones ? poidsColonneZones(d, xm, yb, ys, pz) : poidsColonne(d.couches, yb, ys, pz));
     const u = pz > yb ? d.gammaW * (pz - yb) : 0;
     let G = 0;
     let Q = 0;
@@ -322,11 +424,11 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
       if (bd.nature === 'G') G += bd.q * recouvrement;
       else Q += bd.q * recouvrement;
     }
-    const k = indiceCouche(d.couches, yb);
-    indices.push(k);
+    const coucheBase = coucheEn(d, xm, yb);
+    couchesBase.push(coucheBase);
     tranches.push({
       x: xm, b, ySol: ys, yBase: yb, alpha, W, G, Q,
-      qRetenue: true, u, materiau: d.couches[k].nom, mAlpha: 0,
+      qRetenue: true, u, materiau: coucheBase.nom, mAlpha: 0,
     });
     sommeCharge += (W + G + Q) * Math.sin(alpha);
   }
@@ -365,7 +467,7 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
   const sinA: number[] = [];
   for (let i = 0; i < n; i++) {
     const t = tranches[i];
-    const couche = d.couches[indices[i]];
+    const couche = couchesBase[i];
     cosA.push(Math.cos(t.alpha));
     sinA.push(Math.sin(t.alpha));
     if (couche.drainage === 'draine') {
@@ -381,6 +483,25 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
     }
   }
 
+  // Armatures (EN 1997-3:2025, annexe F.3.1) : comptees seulement si sens = +1, avec
+  // T = min(Rt ; rpo (x1 - xCoupe)) sans multiplication par gammaG ni gammaQ. Le point de
+  // coupe est a l'arriere du cercle : xCoupe = xc + sqrt(R^2 - (yc - y)^2).
+  const armatures: { y: number; xCoupe: number; T: number }[] = [];
+  let momentArmatures = 0;
+  if (sens === 1) {
+    for (const r of d.renforts ?? []) {
+      if (!(r.y < c.yc)) continue;
+      const dy = c.yc - r.y;
+      if (!(c.R * c.R - dy * dy > 0)) continue;
+      const xCoupe = c.xc + Math.sqrt(c.R * c.R - dy * dy);
+      if (!(r.x0 < xCoupe && xCoupe < r.x1)) continue;
+      if (!(arc.xa <= xCoupe && xCoupe <= arc.xb)) continue;
+      const Tr = Math.min(r.Rt, r.rpo * (r.x1 - xCoupe));
+      armatures.push({ y: r.y, xCoupe, T: Tr });
+      momentArmatures += Tr * dy;
+    }
+  }
+
   // alpha est compte positif dans le sens du glissement (sens * sin alpha, comme dans D).
   const mAlpha = (i: number, F: number): number => cosA[i] + (sens * sinA[i] * tanPhi[i]) / F;
   let F = 1;
@@ -390,7 +511,8 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
     for (let i = 0; i < n; i++) {
       numerateur += T[i] / Math.max(M_ALPHA_MIN, mAlpha(i, F));
     }
-    const Fn = numerateur / D;
+    // F = [R sum(T/m) + sum(T_arm (yc - y))] / (R sum moteur) ; D = sum moteur.
+    const Fn = (numerateur + momentArmatures / c.R) / D;
     if (!Number.isFinite(Fn) || Fn <= 0) {
       return { valide: false, motif: 'F non physique (numérateur nul ou négatif)' };
     }
@@ -423,6 +545,7 @@ function analyser(d: DonneesBishop, c: Cercle, n: number): ResultatCercle {
     momentMoteur: D * c.R,
     tranches,
     avertissements,
+    renforts: armatures,
   };
 }
 
