@@ -389,3 +389,38 @@ export function combinaisons2g(approche: Approche2e, cc: ClasseConsequences, p: 
     resistance: { gRv: fois(p.gRN, kR), gRh: fois(p.gRT, kR) },
   }];
 }
+
+/**
+ * Profil 1re generation reetiquete (lot E, audit R4) : meme structure, chaque valeur passee
+ * par `f` avec son chemin (`A1.gG_dst`, `EQU.sol.gPhi`, `Re.R2`...). Sert a construire un
+ * profil d'annexe nationale (Luxembourg) a partir du profil recommande, sans que la
+ * bibliotheque connaisse aucune annexe : l'app fournit `f` (table `AN_LU` d'aedificium-ui).
+ */
+export function reetiqueter1g(
+  p: Profil1g,
+  nom: string,
+  date: string,
+  f: (v: ValeurSourcee, chemin: string) => ValeurSourcee,
+): Profil1g {
+  const jeu = <T extends object>(o: T, prefixe: string): T =>
+    Object.fromEntries(Object.entries(o).map(([k, v]) => [k, f(v as ValeurSourcee, `${prefixe}.${k}`)])) as T;
+  return {
+    nom,
+    date,
+    EQU: { actions: jeu(p.EQU.actions, 'EQU.actions'), sol: jeu(p.EQU.sol, 'EQU.sol') },
+    A1: jeu(p.A1, 'A1'),
+    A2: jeu(p.A2, 'A2'),
+    M1: jeu(p.M1, 'M1'),
+    M2: jeu(p.M2, 'M2'),
+    R1: jeu(p.R1, 'R1'),
+    R2: jeu(p.R2, 'R2'),
+    R3: jeu(p.R3, 'R3'),
+    Re: jeu(p.Re, 'Re'),
+    ...(p.approcheImposee === undefined ? {} : { approcheImposee: p.approcheImposee }),
+  };
+}
+
+/** Clause d'une source de profil (« tableau A.4 »), pour la reecrire sous une autre annexe. */
+export function clauseDeSource(source: string): string {
+  return /tableau [A-Z]\.\d+(-[a-z]+)?/.exec(source)?.[0] ?? source;
+}
